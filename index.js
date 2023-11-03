@@ -1,13 +1,19 @@
 const express = require('express');
 const cors = require('cors');
+var jwt = require('jsonwebtoken');
+const cookieParser = require('cookie-parser')
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config()
 const app = express();
 const port = process.env.PORT || 5000;
 
 // middleware
-app.use(cors());
+app.use(cors({
+    origin: ['http://localhost:5173'],
+    credentials: true
+}));
 app.use(express.json());
+app.use(cookieParser());
 
 console.log(process.env.DB_USER)
 
@@ -22,6 +28,22 @@ const client = new MongoClient(uri, {
     }
 });
 
+// manual middleware
+const verifyToken = async(req,res,next)=>{
+    const token = req.cookies?.token;
+    if(!token){
+        return res.status(401).send({message:'not authorized'})
+    }
+    jwt.verify(token,process.env.ACCESS_TOKEN_SECRET, (err,decoded)=>{
+        if(err){
+            return res.status(401).send({message:'not authorized'})
+        }
+        console.log('value in the toen', decoded);
+        req.user=decoded;
+        next();
+    })
+}
+
 async function run() {
     try {
         // Connect the client to the server	(optional starting in v4.7)
@@ -30,6 +52,20 @@ async function run() {
         const servicecollection = client.db('Car_Doctor').collection('services');
         const bookingcollection = client.db('Car_Doctor').collection('bookings');
 
+        // auth related api
+        app.post('/jwt', async (req, res) => {
+            const user = req.body;
+            console.log(user);
+            const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, { expiresIn: '1h' })
+
+            res.cookie('token', token, {
+                httpOnly: true,
+                secure: false,
+                // sameSite: 'none'
+            })
+                .send({ success: true });
+        })
+        // services related api
         app.get('/services', async (req, res) => {
             const cursor = servicecollection.find();
             const result = await cursor.toArray();
@@ -50,7 +86,13 @@ async function run() {
 
         // bookings
 
-        app.get('/bookings', async (req, res) => {
+        app.get('/bookings', verifyToken, async (req, res) => {
+
+            //console.log('tok tok token', req.cookies.token);
+            if(req.query.email!== req.user.email)
+            {
+                return res.status(403).send({message: 'FORbidden access'})
+            }
             let query = {};
             if (req.query?.email) {
                 query = { email: req.query.email }
